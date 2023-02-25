@@ -5,6 +5,7 @@
 	<supportedVersions>
 		<li>1.4</li>
 	</supportedVersions>
+	<modVersion>1.0.5</modVersion>
 	<packageId>Owlchemist.Reunity</packageId>
 	<description>A collection of performance boosting patches related to the Unity graphics engine to better specialize it for RimWorld's particular needs.</description>
 </ModMetaData>

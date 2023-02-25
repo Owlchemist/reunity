@@ -3,6 +3,7 @@ using Verse;
 using System;
 using System.Diagnostics;
 using System.Reflection.Emit;
+using RimWorld.Planet;
 using UnityEngine;
 using UnityEngine.Rendering;
 using static Reunity.Setup;
@@ -35,7 +36,7 @@ namespace Reunity
 		matrix.m33 = 1.0f;
 		*/
 
-		public static Matrix4x4 matrix = new Matrix4x4() { m10 = 0f, m30 = 0f, m01 = 0f, m11 = 1f, m21 = 0f, m31 = 0f, m12 = 0f, m32 = 0f, m33 = 1f } ;
+		public static Matrix4x4 matrix = new Matrix4x4() { m10 = 0f, m30 = 0f, m01 = 0f, m21 = 0f, m31 = 0f, m12 = 0f, m32 = 0f, m33 = 1f } ;
 		public static Vector3 vectorOne = Vector3.one;
         static Setup()
         {
@@ -43,6 +44,28 @@ namespace Reunity
         }
 	}
 
+	[HarmonyPatch]
+    static class Replace_SetTRS
+    {
+		static IEnumerable<System.Reflection.MethodBase> TargetMethods()
+		{
+			//Line driver for caravans
+			yield return AccessTools.Method(typeof(GenDraw), nameof(GenDraw.DrawWorldLineBetween), new Type[] { typeof(Vector3), typeof(Vector3), typeof(Material), typeof(float) });
+			yield return AccessTools.Method(typeof(WorldRendererUtility), nameof(WorldRendererUtility.DrawQuadTangentialToPlanet));
+		}
+		
+		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			return instructions.MethodReplacer(AccessTools.Method(typeof(Matrix4x4), nameof(Matrix4x4.SetTRS)),
+				AccessTools.Method(typeof(Replace_SetTRS), nameof(Replace_SetTRS.SetTRS)));
+		}
+		
+		static void SetTRS(this ref Matrix4x4 matrix, Vector3 pos, Quaternion q, Vector3 s)
+		{
+			Matrix4x4.TRS_Injected(ref pos, ref q, ref s, out matrix);
+		}
+	}
+	
 	//Patch a few odd stray methods in rimworld that actually use Z rotation to use the z-supporting TRS method
 	[HarmonyPatch]
     static class Replace_TRSWithZ
@@ -60,9 +83,10 @@ namespace Reunity
 			return instructions.MethodReplacer(AccessTools.Method(typeof(Matrix4x4), nameof(Matrix4x4.TRS)),
 				AccessTools.Method(typeof(Replace_TRSWithZ), nameof(Replace_TRSWithZ.TRS)));
 		}
-		
-		static Matrix4x4 TRS(Vector3 pos, Quaternion q, Vector3 s)
-		{			
+
+		public static Matrix4x4 TRS(Vector3 pos, Quaternion q, Vector3 s)
+		{
+			//string method = new StackFrame(2).GetMethod().Name;
 			return new Matrix4x4{
 				m00 = (1.0f - 2.0f * (q.y * q.y + q.z * q.z)) * s.x,
 				m10 = (q.z * q.w) *s.x * 2.0f,
@@ -87,7 +111,12 @@ namespace Reunity
 	[HarmonyPatch(typeof(Matrix4x4), nameof(Matrix4x4.TRS))]
     static class Replace_TRS
     {	
+		static bool Prepare()
+		{
+			return true;
+		}
 		
+
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
 		{
 			var original = AccessTools.Method(typeof(Replace_TRS), nameof(Replace_TRS.TRS));
@@ -101,37 +130,52 @@ namespace Reunity
 			//X and Z rotation are always 0
 			matrix.m00 = (1.0f -2.0f * (q.y *q.y)) *s.x;
 			matrix.m20 = (0f - q.y * q.w) *s.x * 2.0f;
-
+			
+			matrix.m11 = s.y;
+			
 			matrix.m02 = q.y * q.w * s.z * 2f;
 			matrix.m22 = (1.0f - 2.0f * (q.y * q.y)) *s.z;
 			
 			matrix.m03 = pos.x;
 			matrix.m13 = pos.y;
 			matrix.m23 = pos.z;
+			
 			
 			return matrix;
 		}
 		
+		
 		/*
+		
 		static bool Prefix(ref Matrix4x4 __result, Vector3 pos, Quaternion q, Vector3 s)
 		{
-			if (q.x != 0f) Log.Message("O_____________O");
-			if (q.z != 0f) Log.Message("X_____________X");
-			matrix.m00 = (1.0f -2.0f * (q.y *q.y)) *s.x;
-			matrix.m20 = (0f - q.y * q.w) *s.x * 2.0f;
-
-			matrix.m02 = q.y * q.w * s.z * 2f;
-			matrix.m22 = (1.0f - 2.0f * (q.y * q.y)) *s.z;
+			if (q.z != 0f) Log.Message("Z detected... " + q.z.ToString());
+			if (q.x != 0f) Log.Message("X detected... " + q.x.ToString());
+			matrix.m00 = (1.0f - 2.0f * (q.y * q.y + q.z * q.z)) * s.x;
+			matrix.m10 = (q.x * q.y + q.z * q.w) * s.x * 2.0f;
+			matrix.m20 = (q.x * q.z - q.y * q.w) * s.x * 2.0f;
+			matrix.m30 = 0.0f;
+			
+			matrix.m01 = (q.x * q.y - q.z * q.w) * s.y * 2.0f;
+			matrix.m11 = (1.0f - 2.0f * (q.x * q.x + q.z * q.z)) * s.y;
+			matrix.m21 = (q.y * q.z + q.x * q.w) * s.y * 2.0f;
+			matrix.m31 = 0.0f;
+			
+			matrix.m02 = (q.x * q.z + q.y * q.w) * s.z * 2.0f;
+			matrix.m12 = (q.y * q.z - q.x * q.w) * s.z * 2.0f;
+			matrix.m22 = (1.0f - 2.0f * (q.x * q.x + q.y * q.y)) * s.z;
+			matrix.m32 = 0.0f;
 			
 			matrix.m03 = pos.x;
 			matrix.m13 = pos.y;
 			matrix.m23 = pos.z;
+			matrix.m33 = 1.0f;
 			
 			__result = matrix;
 			return false;
 		}
+
 		/*
-		
 		static void Postfix(Matrix4x4 __result, Quaternion q, Vector3 s, Matrix4x4 __state)
 		{
 			if (!__result.Equals(__state))
